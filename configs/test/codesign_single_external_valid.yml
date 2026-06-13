@@ -1,0 +1,25 @@
+mode: single_cdr
+model:
+  checkpoint: ./trained_models/codesign_single.pt
+sampling:
+  seed: 2022
+  sample_structure: true
+  sample_sequence: true
+  cdrs:
+  - H_CDR3
+  num_samples: 50
+  task: external
+  sample_ddg: true
+  ddg_guidance_model: ddgpred
+  ddg_ref: scaled
+  gradient_scale_cord: 4.0
+  gradient_scale_categ: 1.0
+  sample_hydro: true
+  hydro_prior_b: 0.8
+dataset:
+  test:
+    type: sabdab
+    summary_path: ./data/sabdab_summary_all.tsv
+    chothia_dir: ./data/all_structures/chothia
+    processed_dir: ./data/processed
+    split: test

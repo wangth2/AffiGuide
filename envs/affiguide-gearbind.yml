@@ -1,0 +1,37 @@
+name: affiguide-gearbind
+channels:
+  - milagraph
+  - pyg
+  - pytorch
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.8
+  - pytorch=1.12.1
+  - torchvision=0.13.1
+  - cudatoolkit=11.3.1
+
+  # DiffAb / AffiGuide core
+  - joblib
+  - python-lmdb
+  - tqdm
+  - easydict
+  - pyyaml
+  - biopython=1.78
+  - abnumber=0.3.0
+  - mmseqs2
+
+  # GearBind / TorchDrug path
+  - pyg=2.5.2
+  - pytorch-scatter=2.1.0
+  - pytorch-cluster=1.6.0
+  - torchdrug=0.2.1
+  - rdkit
+  - gdown
+  - dm-tree
+
+  # Common scientific stack
+  - numpy=1.24.4
+  - scipy=1.10.1
+  - pip
