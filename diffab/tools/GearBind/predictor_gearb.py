@@ -69,11 +69,15 @@ def _checkpoint_fallback(path: Path) -> Path:
         if path.name.startswith(old) and path.name.endswith(".pth"):
             alt = path.parent / path.name.replace(old, new, 1)
             if alt.exists():
-                return alt
+                raise FileNotFoundError(
+                    'LEGACY_GEARBIND_MODEL_SUBSTITUTION_REJECTED: requested %s is missing; '
+                    'refusing alternate checkpoint %s' % (path, alt))
     return path
 
 
 def _load_task(cfg: Any, checkpoint: Path, device: torch.device):
+    from diffab.utils.model_assets import verify_model
+    verify_model('G', checkpoint)
     _ensure_gearb_registry()
 
     task_cfg = _cfg_get(cfg, "task")
@@ -118,9 +122,10 @@ def _init_bridge(device: torch.device) -> GearBindBridge:
 
     cfg = gearbind_util.load_config(str(cfg_path), context={})
     checkpoints = [_checkpoint_fallback(p) for p in _checkpoint_paths(cfg)]
-    checkpoints = [p for p in checkpoints if p.exists()]
-    if not checkpoints:
-        raise FileNotFoundError(f"No GearBind checkpoint found for config: {cfg_path}")
+    missing = [str(path) for path in checkpoints if not path.is_file()]
+    if missing or not checkpoints:
+        raise FileNotFoundError('Legacy GearBind checkpoint list is incomplete: %s; config=%s'
+                                % (missing, cfg_path))
 
     tasks = [_load_task(cfg, checkpoint, device) for checkpoint in checkpoints]
     chain_a = os.environ.get("GEARBIND_CHAIN_A", "BA")

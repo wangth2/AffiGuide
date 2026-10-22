@@ -1,0 +1,104 @@
+{
+  "schema": "AFFIGUIDE_PINNED_MODEL_ASSETS_V2",
+  "models": {
+    "DiffAb": {
+      "path": "trained_models/codesign_single.pt",
+      "size_bytes": 61402139,
+      "sha256": "53d1c240020ce87c0d2a8f552accb41415106f1d26a8c8701076d76bde81a21e",
+      "version": "DiffAb codesign_single; upstream checkpoint commit ea9d8639e24f4f667ff68aefc7ea784c2290e230",
+      "source": "https://github.com/luost26/diffab",
+      "publisher": "luost26 / DiffAb authors",
+      "verified_download_urls": [
+        "https://huggingface.co/luost26/DiffAb/resolve/ea9d8639e24f4f667ff68aefc7ea784c2290e230/codesign_single.pt"
+      ],
+      "verification": {
+        "status": "OFFICIAL_LFS_SHA256_AND_SIZE_MATCH_LOCAL_FROZEN_FILE",
+        "evidence_url": "https://huggingface.co/luost26/DiffAb/commit/ea9d8639e24f4f667ff68aefc7ea784c2290e230",
+        "full_network_download": "NOT_COMPLETED_NETWORK_TIMEOUT; no claim of successful fresh download"
+      },
+      "license": {
+        "identifier": "Apache-2.0",
+        "scope": "Official model repository metadata labels the checkpoint Apache-2.0",
+        "source_url": "https://huggingface.co/luost26/DiffAb"
+      }
+    },
+    "D": {
+      "path": "diffab/tools/ddg/data/model.pt",
+      "size_bytes": 12523241,
+      "sha256": "a5550dd141cde1362e02ff541ad14d6d587e6b2e2aece5cd5b6db7a6a824c5d7",
+      "version": "HeliXon binding-ddg-predictor data/model.pt commit 907bdd82b834c9d3599d6a3ae2a44af99bd06714",
+      "source": "https://github.com/HeliXonProtein/binding-ddg-predictor",
+      "publisher": "HeliXonProtein",
+      "verified_download_urls": [
+        "https://raw.githubusercontent.com/HeliXonProtein/binding-ddg-predictor/907bdd82b834c9d3599d6a3ae2a44af99bd06714/data/model.pt"
+      ],
+      "verification": {
+        "status": "OFFICIAL_GIT_BLOB_AND_SIZE_MATCH_LOCAL_FROZEN_FILE",
+        "git_blob_sha1": "00e0f32ca4b5f5a9d4bad9bdb31cb0fc4492b250",
+        "evidence_url": "https://api.github.com/repos/HeliXonProtein/binding-ddg-predictor/contents/data/model.pt?ref=907bdd82b834c9d3599d6a3ae2a44af99bd06714",
+        "full_network_download": "PASS: 12523241 bytes retrieved from pinned official GitHub Git blob API; SHA256 equals frozen identity",
+        "download_url": "https://api.github.com/repos/HeliXonProtein/binding-ddg-predictor/git/blobs/00e0f32ca4b5f5a9d4bad9bdb31cb0fc4492b250"
+      },
+      "license": {
+        "identifier": "Apache-2.0",
+        "scope": "Checkpoint is included in the Apache-2.0 upstream repository; no separate file-specific license found",
+        "source_url": "https://github.com/HeliXonProtein/binding-ddg-predictor/blob/907bdd82b834c9d3599d6a3ae2a44af99bd06714/LICENSE"
+      },
+      "verified_download_sources": [
+        {
+          "url": "https://api.github.com/repos/HeliXonProtein/binding-ddg-predictor/git/blobs/00e0f32ca4b5f5a9d4bad9bdb31cb0fc4492b250",
+          "format": "github_blob_base64",
+          "git_blob_sha1": "00e0f32ca4b5f5a9d4bad9bdb31cb0fc4492b250"
+        },
+        {
+          "url": "https://raw.githubusercontent.com/HeliXonProtein/binding-ddg-predictor/907bdd82b834c9d3599d6a3ae2a44af99bd06714/data/model.pt",
+          "format": "raw"
+        }
+      ]
+    },
+    "G": {
+      "path": "trained_models/gearbind2.pth",
+      "size_bytes": 21886515,
+      "sha256": "743b953a0091badf8291033f7fa8eafa2e05f993425473a3990a5f5dad736712",
+      "version": "GearBind gearbind2.pth; author new-gearbind-model-weights.zip SHA256 4dbd2024f06eb9fb2b6fc80f9a4e161115b9ca37298276171e7ba06d10a1239a",
+      "source": "https://github.com/DeepGraphLearning/GearBind",
+      "publisher": "DeepGraphLearning / GearBind authors",
+      "verified_download_urls": [],
+      "upstream_download": {
+        "url": "https://drive.google.com/file/d/1nFEjbjdlRWFwYz7LUNv_D6oLnEsZ5beJ/view",
+        "kind": "official author bundle; exact gearbind2 member identity verified against saved successful upstream download",
+        "readme_commit": "c557c3f6e7b6295c3d505786750fa01e7712223e"
+      },
+      "verification": {
+        "status": "OFFICIAL_DOWNLOADED_ARCHIVE_AND_EXACT_MEMBER_MATCH_LOCAL_FROZEN_FILE",
+        "evidence_url": "https://github.com/DeepGraphLearning/GearBind/blob/c557c3f6e7b6295c3d505786750fa01e7712223e/README.md",
+        "full_network_download": "HISTORICAL_PASS 2026-09-25 official gdown record; archive and exact member rehashed this release; fresh 2026-10-19 network connection timed out",
+        "historical_download_receipt_sha256": "80b0f98fe75d803970732a2051811ba656114781e56005f10db6f8f54465e79e"
+      },
+      "license": {
+        "identifier": null,
+        "code_license": "Apache-2.0",
+        "scope": "Upstream code is Apache-2.0. Official downloaded weight archive contains model files only and no separate licensing notice; confirm checkpoint redistribution terms before public rehosting.",
+        "source_url": "https://github.com/DeepGraphLearning/GearBind/blob/main/LICENSE"
+      },
+      "publication_status": "OFFICIAL_AUTHOR_BUNDLE_AVAILABLE; optional rehosting requires user authorization and checkpoint-license confirmation",
+      "verified_download_sources": [
+        {
+          "url": "https://drive.usercontent.google.com/download?id=1nFEjbjdlRWFwYz7LUNv_D6oLnEsZ5beJ&export=download&confirm=t",
+          "format": "zip_member",
+          "archive_sha256": "4dbd2024f06eb9fb2b6fc80f9a4e161115b9ca37298276171e7ba06d10a1239a",
+          "archive_size_bytes": 255047410,
+          "member": "new-gearbind-model-weights/gearbind2.pth"
+        },
+        {
+          "url": "https://drive.google.com/uc?id=1nFEjbjdlRWFwYz7LUNv_D6oLnEsZ5beJ&export=download&confirm=t",
+          "format": "zip_member",
+          "archive_sha256": "4dbd2024f06eb9fb2b6fc80f9a4e161115b9ca37298276171e7ba06d10a1239a",
+          "archive_size_bytes": 255047410,
+          "member": "new-gearbind-model-weights/gearbind2.pth"
+        }
+      ]
+    }
+  },
+  "policy": "Only exact SHA256/size identities may load. Existing corrupt targets are never overwritten. URLs are pinned official identities; each actual transfer must match SHA256 before atomic installation. G has no invented direct URL. Never deserialize unverified checkpoint bytes."
+}

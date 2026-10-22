@@ -17,6 +17,6 @@ dependencies:
   - biopython=1.78
   - abnumber=0.3.0
   - mmseqs2
-  - numpy
-  - scipy
+  - numpy=1.24.4
+  - scipy=1.10.1
   - pip

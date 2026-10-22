@@ -27,7 +27,10 @@ dependencies:
   - pytorch-scatter=2.1.0
   - pytorch-cluster=1.6.0
   - torchdrug=0.2.1
-  - rdkit
+  - rdkit=2024.03.5
+  # Boost/RDKit need GLIBCXX_3.4.31 (GCC 13 runtime) or newer on Linux.
+  - libstdcxx-ng>=13
+  - libgcc-ng>=13
   - gdown
   - dm-tree
 

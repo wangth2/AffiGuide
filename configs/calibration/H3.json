@@ -1,0 +1,42 @@
+{
+  "schema": "b2_common_global_rms_v1",
+  "status": "FROZEN",
+  "blocks": {
+    "p": {
+      "status": "FROZEN",
+      "s_D": 0.36103632262524976,
+      "s_G": 0.022946203260642995,
+      "statistic": "equal 38-state median of per-state design-block RMS",
+      "units": "Angstrom derivative",
+      "row_projection": "none"
+    },
+    "q": {
+      "status": "FROZEN",
+      "s_D": 0.16611511500270543,
+      "s_G": 0.1370271350331246,
+      "statistic": "equal 38-state median of per-state design-block RMS",
+      "units": "row-tangent probability derivative",
+      "row_projection": "P(g)=g-mean_AA(g)"
+    },
+    "omega": {
+      "status": "FROZEN",
+      "s_D": 0.18380483468259928,
+      "s_G": 0.10080775321023433,
+      "statistic": "equal 38-state median of per-state design-block RMS",
+      "units": "right-local radian derivative",
+      "row_projection": "none"
+    }
+  },
+  "numerical": {
+    "difference_atol": 1e-12,
+    "difference_rtol": 1e-08,
+    "common_zero_atol": 1e-12,
+    "common_zero_rtol": 1e-08,
+    "scale_min": 1e-12
+  },
+  "provenance": {
+    "source_sha256": "d8d7b7fb566456c358447d6a6c2e210896d0d1cff2ecf1e45eb17fdfdf72cbe3",
+    "source_states": "19 H3 complexes; 38 D-only states at t40 and t15",
+    "calibration_scope": "H3"
+  }
+}

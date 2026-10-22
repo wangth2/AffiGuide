@@ -39,6 +39,7 @@ trained_models/*
 *.pth
 *.ckpt
 *.safetensors
+*.download.lock
 
 # Large local data files
 *.pkl
@@ -60,3 +61,8 @@ trained_models/*
 !trained_models/.gitkeep
 !diffab/tools/ddg/data/.gitkeep
 !diffab/tools/GearBind/checkpoints/.gitkeep
+
+# Small validated numerical artifacts are part of this offline candidate.
+!diffab/numerics/build/
+!diffab/numerics/build/**
+!diffab/tools/GearBind/native/torch_ext.so

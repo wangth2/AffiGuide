@@ -1,0 +1,16 @@
+{
+  "schema": "mc20_response_numerical_policy_v1",
+  "status": "FROZEN",
+  "MTV": {
+    "tv_atol": 1e-07,
+    "tv_rtol": 1e-07,
+    "bracket_steps": 40,
+    "bisection_steps": 52,
+    "eta_scaled_max": 1099511627776,
+    "initial_eta_scaled": 1.0,
+    "minimum_gradient_scale": 1e-12
+  },
+  "provenance": {
+    "source_sha256": "eaa62e1fbe1a93af0b4608ca34cc0c9e24fd90ba2801caa37e76491fb77df5f9"
+  }
+}

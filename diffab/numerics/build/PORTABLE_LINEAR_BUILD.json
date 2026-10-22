@@ -1,0 +1,23 @@
+{
+  "schema": "PORTABLE_LINEAR_FIXED_ORDER_FP32_BUILD_V2_DRIVER_API",
+  "nvcc_version": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2023 NVIDIA Corporation\nBuilt on Tue_Feb__7_19:32:13_PST_2023\nCuda compilation tools, release 12.1, V12.1.66\nBuild cuda_12.1.r12.1/compiler.32415258_0\n",
+  "source_path": "portable_linear.cu",
+  "source_sha256": "10b28b40e1e24ff296f0623e0743bac92e7422a9f9d16847993aedc0865355ac",
+  "returncode": 0,
+  "stdout": "",
+  "stderr": "",
+  "elapsed_seconds": 0.4574558734893799,
+  "compiled_compute_capabilities": [
+    80,
+    86,
+    89
+  ],
+  "math": "Each output one thread, fixed serial loop, explicit __fmul_rn then __fadd_rn; bias once after dot; dX/dW/db fixed serial loops, no atomic.",
+  "runtime_linkage": "Device-only fatbin loaded via existing NVIDIA libcuda Driver API; no host .so, libcudart, GLIBC or PyTorch C++ ABI dependency in this artifact",
+  "GPU_or_model_run": false,
+  "binary_path": "portable_linear.fatbin",
+  "binary_bytes": 108176,
+  "binary_sha256": "a31834171898bd7af21bd252842413218f0795a795bdd6c74c530a4098964077",
+  "status": "COMPILED_GPU_EXECUTION_NOT_TESTED",
+  "release_note": "Frozen device binary reused byte-for-byte; release integration requires independent regression."
+}

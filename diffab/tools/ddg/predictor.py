@@ -3,15 +3,48 @@ import torch
 from .models.predictor import DDGPredictor
 from diffab.modules.common.so3 import so3vec_to_rotation
 from diffab.modules.common.geometry import reconstruct_backbone_partially
+from diffab.modules.diffusion.rotation_guidance import local_rotation_exp, rotation_autograd_grad
 import torch.nn.functional as F
 
-MODELNAME = "./diffab/tools/ddg/data/model.pt"
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-CKPT = torch.load(MODELNAME, map_location=DEVICE)
-MODEL = DDGPredictor(CKPT["config"].model)
-MODEL.load_state_dict(CKPT["model"])
-MODEL.to(DEVICE)
-MODEL.eval()
+# Loading is explicit so importing the sampler never loads weights or CUDA.
+MODELNAME = None
+MODEL = None
+
+
+def configure(checkpoint=None, device=None, expected_sha256=None):
+    """Set the legacy predictor's checkpoint; loading remains lazy."""
+    global MODELNAME, MODEL, _DEVICE, _EXPECTED_SHA256
+    import os
+    from pathlib import Path
+    default = Path(__file__).resolve().parent / 'data' / 'model.pt'
+    MODELNAME = str(Path(checkpoint or os.environ.get('AFFIGUIDE_D_CHECKPOINT', default)).expanduser().resolve())
+    _DEVICE = device
+    _EXPECTED_SHA256 = expected_sha256
+    MODEL = None
+
+
+def get_model(device=None):
+    """Load the frozen predictor once, preserving its original parameter keys."""
+    global MODEL
+    from pathlib import Path
+    import hashlib
+    if MODEL is not None:
+        return MODEL
+    if MODELNAME is None:
+        configure(device=device)
+    path = Path(MODELNAME)
+    if not path.is_file():
+        raise FileNotFoundError('ddG predictor checkpoint not found: %s; set sampling.ddg_checkpoint or AFFIGUIDE_D_CHECKPOINT' % path)
+    if _EXPECTED_SHA256 is not None and hashlib.sha256(path.read_bytes()).hexdigest() != _EXPECTED_SHA256:
+        raise ValueError('ddG predictor checkpoint SHA256 mismatch')
+    from diffab.utils.model_assets import verify_model
+    verify_model('D', path)
+    saved = torch.load(str(path), map_location='cpu')
+    config = saved['config']
+    MODEL = DDGPredictor(config['model'] if isinstance(config, dict) else config.model)
+    MODEL.load_state_dict(saved['model'], strict=True)
+    MODEL.to(device or _DEVICE or 'cpu').eval()
+    return MODEL
 
 
 def _num_aa_classes(batch_ref):
@@ -58,7 +91,8 @@ def convert_batch_wt(batch_ref):
     return batch_wt, mutation_mask, mask
 
 
-def create_batch_mut(batch_wt, aa_mut, pos_mut, v_next, mutation_mask, chain_nb, res_nb, mask_atoms, aa_mode="hard"):
+def create_batch_mut(batch_wt, aa_mut, pos_mut, v_next, mutation_mask, chain_nb, res_nb, mask_atoms,
+                     aa_mode="hard", R_override=None):
     """
     aa_mode:
       - 'hard': predictor sees hard aa index only
@@ -86,8 +120,12 @@ def create_batch_mut(batch_wt, aa_mut, pos_mut, v_next, mutation_mask, chain_nb,
     else:
         batch_mut["aa_prob"] = None
 
-    with torch.no_grad():
-        R_new = so3vec_to_rotation(v_next)
+    if R_override is None:
+        with torch.no_grad():
+            R_new = so3vec_to_rotation(v_next)
+    else:
+        # The geometry bridge owns this graph: never detach or convert via v.
+        R_new = R_override
     t_new = pos_mut
 
     pos_new, mask_new = reconstruct_backbone_partially(
@@ -106,49 +144,91 @@ def create_batch_mut(batch_wt, aa_mut, pos_mut, v_next, mutation_mask, chain_nb,
     return batch_mut
 
 
-def _predict_ddg_common(batch_ref, aa_gen, pos_gen, v_next, aa_ref=None, pos_ref=None, v_ref=None,
-                        clamp_pred_min=None, clamp_pred_max=None, aa_mode="hard", track_pos_grad=True,
-                        track_seq_grad=False):
+@torch.no_grad()
+def _prepare_reference(batch_ref, aa_ref=None, pos_ref=None, v_ref=None):
     batch_wt, mutation_mask, mask = convert_batch_wt(batch_ref)
-
     if (aa_ref is not None) and (pos_ref is not None):
-        pos_ref = pos_ref[:, :, :]
         batch_wt = create_batch_mut(
-            batch_wt, aa_ref, pos_ref, v_ref[:, :], mutation_mask,
+            batch_wt, aa_ref.detach(), pos_ref.detach()[:, :, :], v_ref.detach()[:, :], mutation_mask,
             batch_ref["chain_nb"][:, :], batch_ref["res_nb"][:, :], batch_ref["mask_heavyatom"][:, :, :-1],
             aa_mode="hard",
         )
+    return batch_wt, mutation_mask, mask
 
-    if track_seq_grad:
-        if aa_gen.dim() != 3:
+
+def _clamp_prediction(pred, clamp_pred_min, clamp_pred_max):
+    if clamp_pred_min is not None and clamp_pred_max is not None:
+        return torch.clamp(pred, min=clamp_pred_min, max=clamp_pred_max)
+    return pred
+
+
+def _predict_ddg_common(batch_ref, aa_gen, pos_gen, v_next, aa_ref=None, pos_ref=None, v_ref=None,
+                        clamp_pred_min=None, clamp_pred_max=None, aa_mode="hard", track_pos_grad=True,
+                        track_seq_grad=False):
+    # All reconstruction operations must also be in enable_grad. autograd.grad
+    # computes the same sum gradient without accumulating predictor parameter.grad.
+    with torch.enable_grad():
+        batch_wt, mutation_mask, _ = _prepare_reference(batch_ref, aa_ref, pos_ref, v_ref)
+        if track_seq_grad and aa_gen.dim() != 3:
             raise ValueError("Sequence-gradient branch expects soft aa prob with shape (N, L, K).")
-        aa_gen = aa_gen.clone().detach().requires_grad_(True)
-    else:
-        aa_gen = aa_gen.clone().detach()
-
-    if track_pos_grad:
-        pos_gen = pos_gen.clone().detach().requires_grad_(True)
-    else:
-        pos_gen = pos_gen.clone().detach()
-
-    v_next = v_next.clone().detach()
-
-    batch_mut = create_batch_mut(
-        batch_wt, aa_gen, pos_gen[:, :, :], v_next[:, :, :], mutation_mask,
-        batch_ref["chain_nb"][:, :], batch_ref["res_nb"][:, :], batch_ref["mask_heavyatom"][:, :, :-1],
-        aa_mode=aa_mode,
-    )
-    batch = {"wt": batch_wt, "mut": batch_mut, "mutation_mask": mutation_mask, "mask": mask}
-
-    with torch.set_grad_enabled(True):
-        pred = MODEL(batch["wt"], batch["mut"])
-        if clamp_pred_min is not None and clamp_pred_max is not None:
-            pred = torch.clamp(pred, min=clamp_pred_min, max=clamp_pred_max)
-        pred.backward(gradient=torch.ones_like(pred))
-
-    aa_grad = aa_gen.grad if track_seq_grad else None
-    pos_grad = pos_gen.grad if track_pos_grad else None
+        aa_gen = aa_gen.clone().detach().requires_grad_(track_seq_grad)
+        pos_gen = pos_gen.clone().detach().requires_grad_(track_pos_grad)
+        v_next = v_next.clone().detach()
+        batch_mut = create_batch_mut(
+            batch_wt, aa_gen, pos_gen[:, :, :], v_next[:, :, :], mutation_mask,
+            batch_ref["chain_nb"][:, :], batch_ref["res_nb"][:, :], batch_ref["mask_heavyatom"][:, :, :-1],
+            aa_mode=aa_mode,
+        )
+        pred = _clamp_prediction(get_model(pos_gen.device)(batch_wt, batch_mut), clamp_pred_min, clamp_pred_max)
+        leaves = ([aa_gen] if track_seq_grad else []) + ([pos_gen] if track_pos_grad else [])
+        gradients = torch.autograd.grad(pred.sum(), leaves, create_graph=False) if leaves else []
+        aa_grad = gradients[0] if track_seq_grad else None
+        pos_grad = gradients[-1] if track_pos_grad else None
     return pred.detach(), aa_grad, pos_grad
+
+
+def predict_ddg_geometry(batch_ref, aa_gen, pos_gen, v_next, aa_ref=None, pos_ref=None, v_ref=None,
+                         clamp_pred_min=None, clamp_pred_max=None):
+    """One hard-sequence forward, independent mu and right-local omega leaves.
+
+    Returns (clamped_energy, g_mu, g_omega, diagnostics). Leaf ownership is
+    exclusively internal; neither the diffusion history nor the fixed WT is
+    differentiated. Sum, not mean, preserves the legacy per-sample scale.
+    """
+    with torch.enable_grad():
+        batch_wt, mutation_mask, _ = _prepare_reference(batch_ref, aa_ref, pos_ref, v_ref)
+        mu_leaf = pos_gen.detach().clone().requires_grad_(True)
+        omega = torch.zeros_like(v_next, requires_grad=True)
+        with torch.no_grad():
+            R_base = so3vec_to_rotation(v_next.detach())
+        R_trial = R_base @ local_rotation_exp(omega)
+        batch_mut = create_batch_mut(
+            batch_wt, aa_gen.detach(), mu_leaf, v_next.detach(), mutation_mask,
+            batch_ref["chain_nb"][:, :], batch_ref["res_nb"][:, :], batch_ref["mask_heavyatom"][:, :, :-1],
+            aa_mode="hard", R_override=R_trial,
+        )
+        raw_pred = get_model(pos_gen.device)(batch_wt, batch_mut)
+        pred = _clamp_prediction(raw_pred, clamp_pred_min, clamp_pred_max)
+        g_mu, g_omega = rotation_autograd_grad(pred.sum(), (mu_leaf, omega), create_graph=False)
+    saturated = torch.zeros_like(raw_pred, dtype=torch.bool)
+    if clamp_pred_min is not None and clamp_pred_max is not None:
+        saturated = (raw_pred < clamp_pred_min) | (raw_pred > clamp_pred_max)
+    return pred.detach(), g_mu.detach(), g_omega.detach(), {
+        "raw_pred": raw_pred.detach(), "clamp_saturated": saturated.detach(),
+    }
+
+
+@torch.no_grad()
+def predict_ddg_score(batch_ref, aa_gen, pos_gen, v_next, aa_ref=None, pos_ref=None, v_ref=None,
+                      clamp_pred_min=None, clamp_pred_max=None, R_override=None):
+    """Explicit forward-only hard-aa score; safe in no_grad and inference mode."""
+    batch_wt, mutation_mask, _ = _prepare_reference(batch_ref, aa_ref, pos_ref, v_ref)
+    batch_mut = create_batch_mut(
+        batch_wt, aa_gen, pos_gen, v_next, mutation_mask,
+        batch_ref["chain_nb"][:, :], batch_ref["res_nb"][:, :], batch_ref["mask_heavyatom"][:, :, :-1],
+        aa_mode="hard", R_override=R_override,
+    )
+    return _clamp_prediction(get_model(pos_gen.device)(batch_wt, batch_mut), clamp_pred_min, clamp_pred_max).detach()
 
 
 def predict_ddg_position(batch_ref, aa_gen, pos_gen, v_next, aa_ref=None, pos_ref=None, v_ref=None,

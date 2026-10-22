@@ -12,7 +12,7 @@ from diffab.modules.encoders.ga import GAEncoder
 from .transition import RotationTransition, PositionTransition, AminoacidCategoricalTransition
 
 
-def _get_ddg_predictor(ddg_guidance_model):
+def _get_ddg_predictor(ddg_guidance_model, device=None):
     """Return ddG guidance functions for the requested predictor."""
     if ddg_guidance_model == 'ddgpred':
         from diffab.tools.ddg.predictor import (
@@ -20,6 +20,10 @@ def _get_ddg_predictor(ddg_guidance_model):
             predict_ddg_position,
             predict_ddg_sequence,
         )
+        # Retain the legacy predictor-load point. Modern guidance supplies an
+        # already-loaded scorer and never reaches this compatibility branch.
+        from diffab.tools.ddg.predictor import get_model
+        get_model(device)
         return predict_ddg_batch, predict_ddg_position, predict_ddg_sequence
 
     if ddg_guidance_model in ('gearbind', 'gearb'):
@@ -245,7 +249,250 @@ class FullDPM(nn.Module):
 
         return loss_dict
 
-    def sample(
+    @torch.no_grad()
+    def sample(self, batch_ref, v, p, s, res_feat, pair_feat, mask_generate, mask_res,
+               _outfile=None, guidance=None, scorers=None, case_id='', design_id=0,
+               seed=2022, trajectory_seed=None, generation_seed=2022, checkpoint=None, capture=None,
+               numerical_context=None, cdr=None, stop_after=None, **legacy_options):
+        """Reverse diffusion with visible shared-proposal guidance and selection.
+
+        See Methods: calibrated consensus, TV-matched mirror descent, and
+        multi-candidate selection. Old YAMLs without `guidance` retain their
+        original single-candidate entry and checkpoint parameter names.
+        """
+        if guidance is None:
+            return self._sample_legacy(batch_ref, v, p, s, res_feat, pair_feat,
+                                       mask_generate, mask_res, _outfile, **legacy_options)
+        from .guidance_config import normalize_guidance, load_calibration, step_schedule, needs_gearbind
+        from .guidance_math import derive_seed, effective_sampling_probs, select
+        from .guidance_math import apply_saved_rotation
+        from diffab.utils.sampling import (candidate_rng, rng_state, restore_rng,
+            save_checkpoint, tensor_hash, clean)
+        from pathlib import Path
+        import math
+        cfg=normalize_guidance(guidance)
+        if v.shape[0] != 1 or self.num_steps != 100:
+            raise ValueError('Paper guidance requires one independent T100 trajectory per call')
+        if not legacy_options.get('sample_structure', True) or not legacy_options.get('sample_sequence', True):
+            raise ValueError('Paper guidance requires structure and sequence sampling; use the legacy entry for abopt')
+        if scorers is None or scorers.D is None:
+            raise ValueError('The configured D scorer is required')
+        if needs_gearbind(cfg) and scorers.G is None:
+            raise ValueError('The selected configuration requires GearBind')
+        calibration=load_calibration(cfg,cdr=cdr or cfg.get('cdr'))
+        mask=mask_generate.bool(); device=p.device
+        signature=dict(case_id=case_id, design_id=int(design_id), seed=int(seed),
+            generation_seed=int(generation_seed), trajectory_seed=trajectory_seed,
+            runtime_identity=legacy_options.get('runtime_identity'),
+            guidance=cfg, calibration=calibration, reference=scorers.reference.reference_hash,
+            input={k:tensor_hash(x) for k,x in dict(v=v,p=p,s=s,mask=mask,
+                    res=res_feat,pair=pair_feat).items()})
+        job=dict(case_id=case_id,design_id=int(design_id),generation_seed=int(generation_seed))
+        trace=[]; next_t=100; traj={}
+        if checkpoint is not None and Path(checkpoint).is_file():
+            saved=torch.load(checkpoint,map_location='cpu')
+            if saved['signature'] != signature:
+                raise ValueError('Checkpoint input, task or scientific configuration changed')
+            current={k:x.to(device) if torch.is_tensor(x) else x for k,x in saved['state'].items()}
+            next_t=saved['next_t']; trace=saved['trace']
+            restore_rng(saved['rng'],device)
+            if numerical_context is not None: numerical_context.load_state_dict(saved['numerical_context'])
+        else:
+            # Preserve the published initialization and random draw order,
+            # including its historical exclusive upper category bound.
+            pn=self._normalize_position(p)
+            vrand=random_uniform_so3(v.shape[:2],device=device)
+            prand=torch.randn_like(pn)
+            vi=torch.where(mask[...,None],vrand,v)
+            pi=torch.where(mask[...,None],prand,pn)
+            srand=torch.randint_like(s,low=0,high=19)
+            si=torch.where(mask,srand,s)
+            current=dict(v=vi,R=so3vec_to_rotation(vi),p=self._unnormalize_position(pi),s=si)
+        traj[next_t]=(current['v'],current['p'],current['s'])
+        steps=range(next_t,0,-1)
+        if legacy_options.get('pbar',False): steps=tqdm(steps,desc='Sampling')
+        for step_index,t in enumerate(steps):
+            if stop_after is not None and step_index >= stop_after: break
+            before=current
+            schedule=step_schedule(cfg,t)
+            # The public proposal is differentiated once, in p -> R -> q order.
+            proposal=self._guided_proposal(current,t,res_feat,pair_feat,mask,mask_res,
+                                            scorers,cfg,calibration,schedule,job=job)
+            states=[]
+            for slot in range(schedule['K']):
+                def realize():
+                    if slot==0:
+                        vc,z=proposal['v'],proposal['z']
+                    else:
+                        vc=self.trans_rot.denoise(current['v'],proposal['vhead'],mask,proposal['tt'])
+                        z=torch.randn_like(current['p']) if t>1 else torch.zeros_like(current['p'])
+                        if proposal['rotation_gamma']:
+                            vc=apply_saved_rotation(vc,proposal['rotation_delta_used'],mask)
+                    sampled=self.trans_seq._sample(proposal['q_used'])
+                    sc=torch.where(mask,sampled,current['s'])
+                    pc=torch.where(mask[...,None],proposal['mu']+proposal['sigma']*z,current['p'])
+                    return dict(v=vc.detach(),R=so3vec_to_rotation(vc).detach(),p=pc.detach(),s=sc.detach(),
+                        post=proposal['q_used'].detach(),q_used=proposal['q_used'].detach(),
+                        q_before=proposal['q_before'].detach(),q_D_plus=proposal['q_D_plus'].detach(),
+                        sampling_probs_used=effective_sampling_probs(proposal['q_used']).detach())
+                if slot==0: state=realize()
+                else:
+                    slot_seed=derive_seed(seed,case_id,design_id,t,'MC20_R0_MC_%d'%slot)
+                    with candidate_rng(device,slot_seed): state=realize()
+                for name in ('p','v','s'):
+                    if not torch.equal(state[name][~mask],current[name][~mask]):
+                        raise RuntimeError('Non-design context changed: '+name)
+                states.append(state)
+            # Literal B1 hard scoring: no batching, gradient recomputation,
+            # candidate replacement, or normalization of the raw D objective.
+            invalid=[i for i,x in enumerate(states) if not all(bool(torch.isfinite(x[k]).all())
+                     for k in ('p','v','post','sampling_probs_used'))]
+            ds=[float('nan') if i in invalid else float(scorers.D.hard(scorers.reference,
+                    x['s'],x['p'],x['R']).reshape(-1)[0]) for i,x in enumerate(states)]
+            gs=[None]*len(states)
+            if cfg['selector']=='dg_minimax':
+                for i,x in enumerate(states):
+                    if i in invalid: continue
+                    try: gs[i]=float(scorers.G.score(x['s'],x['p'],x['R'])['hard_score'])
+                    except RuntimeError as error:
+                        if 'Nonfinite hard GearBind score' not in str(error): raise
+                winner,selection=select(ds,[float('nan') if x is None else x for x in gs],calibration['hard'])
+            else:
+                eligible=[i for i,x in enumerate(ds) if math.isfinite(x)]
+                if not eligible: raise FloatingPointError('All candidates unscoreable')
+                winner=min(eligible,key=lambda i:(ds[i],i)); selection=dict(rule='raw_D_minimum')
+            current=states[winner]; current['D_hard']=ds[winner]
+            if gs[winner] is not None: current['G_hard']=gs[winner]
+            row=clean(dict(t=t,K=len(states),winner_id=winner,D_scores=ds,G_scores=gs,
+                selection=selection,schedule=schedule,direct=proposal['diagnostics'],
+                state_hashes={k:tensor_hash(current[k]) for k in ('p','v','R','s','q_used')},
+                invalid_candidates=invalid))
+            trace.append(row); next_t=t-1
+            if capture is not None: capture(t,before,proposal,states,winner,row,current)
+            save_checkpoint(checkpoint,dict(signature=signature,state=current,next_t=next_t,
+                trace=trace,rng=rng_state(device),numerical_context=(numerical_context.state_dict()
+                    if numerical_context is not None else None)))
+            traj[t-1]=(current['v'],current['p'],current['s'])
+            traj[t]=tuple(x.cpu() for x in traj[t])
+        if next_t==0 and _outfile is not None:
+            positions=torch.nonzero(mask[0],as_tuple=False).view(-1).cpu().tolist()
+            with open(_outfile,'a',encoding='utf-8') as stream:
+                stream.write(json.dumps(dict(batch_item_index=0,t_final=0,
+                    positions_internal=positions,mask_idx=positions,mask_len=len(positions),
+                    mask_bool=mask[0].cpu().tolist(),probs=current['q_used'][0,mask[0]].cpu().tolist()))+'\n')
+        self.last_sampling_result=dict(status='GENERATED' if next_t==0 else 'PARTIAL',
+            state=current,q_used=current.get('q_used'),trace=trace,next_t=next_t,signature=signature)
+        return traj
+
+    @torch.no_grad()
+    def _guided_proposal(self,current,t,res,pair,mask,mask_res,scorers,cfg,calibration,schedule,job=None):
+        """One public proposal. The three derivative evaluation points are explicit."""
+        from .guidance_math import combine, saved_delta, additive_update, apply_mtv
+        from .rotation_guidance import local_rotation_exp, rotation_autograd_grad
+        from diffab.utils.sampling import clean
+        device=current['p'].device
+        tt=torch.full((1,),t,dtype=torch.long,device=device)
+        beta=self.trans_pos.var_sched.betas[t].expand(1)
+        vhead,_,eps,qhead=self.eps_net(current['v'],self._normalize_position(current['p']),
+                                     current['s'],res,pair,beta,mask,mask_res)
+        v=self.trans_rot.denoise(current['v'],vhead,mask,tt)
+        q,sgeo=self.trans_seq.denoise(current['s'],qhead,mask,tt,prior_b=cfg['hydro_prior_b'])
+        mu_norm,_,z=self.trans_pos.denoise(self._normalize_position(current['p']),eps,mask,tt)
+        mu=self._unnormalize_position(mu_norm); vbar=v.detach().clone()
+        sigma=self.trans_pos.var_sched.sigmas[t].expand(1,1,1)
+        gradients={}; common={}; d_info={}; directions=schedule['directions']
+        def g_gradient(block,position,rotation):
+            response=scorers.G.score(sgeo,position,so3vec_to_rotation(rotation),q=q,
+                gradient_blocks=[block],gradient_objective='historical_blocks')
+            key={'p':'position_gradient','omega':'omega_gradient','q':'sequence_gradient'}[block]
+            value=torch.as_tensor(response[key],device=device,dtype=q.dtype)
+            if value.shape != (q.shape if block=='q' else mu.shape) or not bool(torch.isfinite(value).all()):
+                raise FloatingPointError('Invalid GearBind '+block+' gradient')
+            if bool((value[~mask]!=0).any()): raise ValueError('GearBind gradient escaped design mask')
+            return value.detach()
+        def consensus(block,gd,position,rotation):
+            gradients['D_'+block]=gd
+            if directions[block]=='COMMON':
+                gg=g_gradient(block,position,rotation); gradients['G_'+block]=gg
+                gd,common[block]=combine(gd,gg,mask,block,calibration['common'])
+            gradients['used_'+block]=gd
+            return gd
+        # Position: differentiate the common denoised mean before adding noise.
+        gp=torch.zeros_like(mu); joint_omega=None
+        if cfg['protocol']=='legacy_k1' and directions['omega']!='OFF':
+            # Historical K1 computes p and omega jointly at the pre-update
+            # mean. It is a distinct published protocol, not DG50 with K=1.
+            with torch.enable_grad():
+                leaf=mu.detach().clone().requires_grad_(True)
+                omega=torch.zeros_like(v,requires_grad=True)
+                value,d_info['joint_geometry']=scorers.D.hard_details(scorers.reference,sgeo.detach(),leaf,
+                    so3vec_to_rotation(v.detach())@local_rotation_exp(omega))
+                gp,joint_omega=rotation_autograd_grad(value.sum(),(leaf,omega),allow_unused=False)
+            gp=consensus('p',gp.detach(),mu,v)
+        elif directions['p']!='OFF':
+            with torch.enable_grad():
+                leaf=mu.detach().clone().requires_grad_(True)
+                value,d_info['p']=scorers.D.hard_details(scorers.reference,sgeo.detach(),leaf,
+                                                        so3vec_to_rotation(v.detach()))
+                gp,=torch.autograd.grad(value.sum(),leaf,allow_unused=False)
+            gp=consensus('p',gp.detach(),mu,v)
+        guided=(torch.where(mask[...,None],mu-float(cfg['coordinate_scale'])*sigma*gp,mu)
+                if directions['p']!='OFF' else mu.detach().clone())
+        if cfg['protocol']=='legacy_k1' and directions['p']!='OFF':
+            pos_update=-gp*(float(cfg['coordinate_scale'])*sigma)
+            guided=torch.where(mask[...,None].expand_as(mu),mu+pos_update,mu).detach()
+        # Rotation: DG50 differentiates at p+; legacy K1 retains its joint leaf.
+        rotation_gradient=rotation_delta=None; rotation_info=None; rotgamma=0.
+        if directions['omega']!='OFF':
+            if joint_omega is not None:
+                gd=joint_omega
+            else:
+                with torch.enable_grad():
+                    omega=torch.zeros_like(v,requires_grad=True)
+                    value,d_info['omega']=scorers.D.hard_details(scorers.reference,sgeo.detach(),guided.detach(),
+                        so3vec_to_rotation(v.detach())@local_rotation_exp(omega))
+                    gd,=rotation_autograd_grad(value.sum(),omega,allow_unused=False)
+            rotation_gradient=consensus('omega',gd.detach(),guided,v)
+            rotgamma=float(cfg['rotation_scale'])
+            if float(cfg['rotation_cap_degrees']) != 5.:
+                raise ValueError('This frozen rotation implementation has a 5 degree cap')
+            v,rotation_delta,rotation_info=saved_delta(v,rotation_gradient,mask,
+                self.trans_rot.var_sched.sigmas[t],rotgamma)
+        # Sequence: D uses argmax(q) geometry; G retains sgeo. These identities
+        # intentionally differ. Both derivatives see updated p+ and R+.
+        gq=torch.zeros_like(q)
+        if directions['q']!='OFF':
+            with torch.enable_grad():
+                leaf=q.detach().clone().requires_grad_(True)
+                value,d_info['q']=scorers.D.soft_details(scorers.reference,leaf,leaf.argmax(-1),
+                                                       guided.detach(),so3vec_to_rotation(v.detach()))
+                gq,=torch.autograd.grad(value.sum(),leaf,allow_unused=False)
+            gq=consensus('q',gq.detach(),guided,v)
+        eta=float(cfg['sequence_scale'])*(1-self.trans_seq.var_sched.alpha_bars[t])
+        if directions['q']=='OFF' or cfg['sequence_operator']=='none':
+            updated=q.detach().clone(); uinfo=dict(rule='DISABLED_CHANNEL_LITERAL_Q0')
+        elif cfg['sequence_operator']=='MTV':
+            updated,uinfo=apply_mtv(q,gq,eta,mask,calibration['numerical'])
+        elif cfg['protocol']=='legacy_k1':
+            eta=float(cfg['sequence_scale'])*(1-self.trans_seq.var_sched.alpha_bars[t].expand(1,1,1))
+            updated=q-eta*gq
+            updated=torch.where(mask[...,None].expand_as(updated),updated,q.detach())
+            updated=torch.clamp(updated,min=1e-8)
+            updated=(updated/updated.sum(dim=-1,keepdim=True)).detach()
+            uinfo=dict(rule='HISTORICAL_K1_ADD',eta_seq=float(eta.flatten()[0]))
+        else: updated,uinfo=additive_update(q,gq,eta,mask)
+        q_D_plus=updated
+        for name,g in gradients.items():
+            if not bool(torch.isfinite(g[mask]).all()): raise FloatingPointError('Nonfinite '+name)
+        # The per-step JSON trace contains scalar diagnostics only.
+        sequence_summary={k:value for k,value in uinfo.items() if not torch.is_tensor(value)}
+        return dict(mu=guided,v=v,vhead=vhead,q_before=q,q_D_plus=q_D_plus,q_used=updated,
+            sgeo=sgeo,z=z,sigma=sigma,tt=tt,v_unrot=vbar,mu_unguided=mu,gradients=gradients,
+            rotation_gradient=rotation_gradient,rotation_gamma=rotgamma,rotation_delta_used=rotation_delta,
+            sequence_details=uinfo,
+            diagnostics=clean(dict(common=common,D=d_info,rotation=rotation_info,sequence_update=sequence_summary)))
+
+    def _sample_legacy(
         self,
         batch_ref,
         v,
@@ -328,7 +575,7 @@ class FullDPM(nn.Module):
                 predict_ddg_batch_fn,
                 predict_ddg_position_fn,
                 predict_ddg_sequence_fn,
-            ) = _get_ddg_predictor(ddg_guidance_model)
+            ) = _get_ddg_predictor(ddg_guidance_model, device)
 
             if ddg_guidance_model == 'ddgpred':
                 if ddg_ref == 'scaled':

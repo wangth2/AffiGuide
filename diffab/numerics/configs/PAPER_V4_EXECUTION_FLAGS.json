@@ -1,0 +1,18 @@
+{
+  "schema": "AFFIGUIDE_PAPER_V4_EXECUTION_FLAGS",
+  "generator": {
+    "cudnn_benchmark": false,
+    "cudnn_deterministic": true,
+    "cudnn_allow_tf32": true,
+    "matmul_allow_tf32": false,
+    "deterministic_algorithms": false
+  },
+  "gearbind": {
+    "cudnn_benchmark": false,
+    "cudnn_deterministic": false,
+    "cudnn_allow_tf32": true,
+    "matmul_allow_tf32": false,
+    "deterministic_algorithms": false
+  },
+  "scope": "Observed frozen V4 process roles; generator deterministic flag is set by original seed_all, G sidecar does not call that helper; no CUBLAS environment override or AMP enabled."
+}

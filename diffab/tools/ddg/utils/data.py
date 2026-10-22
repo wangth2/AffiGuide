@@ -101,7 +101,7 @@ class KnnResidue(object):
     def __call__(self, data):
         pos_CA = data['wt']['pos14'][:, ATOM_CA]    
         pos_CA_mut = pos_CA[data['mutation_mask']]  
-        diff = pos_CA_mut.view(1, -1, 3) - pos_CA.view(-1, 1, 3)3
+        diff = pos_CA_mut.view(1, -1, 3) - pos_CA.view(-1, 1, 3)
         dist = torch.linalg.norm(diff, dim=-1)  
 
         try:

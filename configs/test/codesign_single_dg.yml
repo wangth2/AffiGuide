@@ -1,0 +1,67 @@
+# Default updated method. Original YAMLs remain available via --config.
+mode: single_cdr
+model:
+  checkpoint: ./trained_models/codesign_single.pt
+  sha256: 53d1c240020ce87c0d2a8f552accb41415106f1d26a8c8701076d76bde81a21e
+sampling:
+  seed: 2022
+  sample_structure: true
+  sample_sequence: true
+  cdrs:
+  - H_CDR3
+  num_samples: 100
+guidance:
+  protocol: shared_proposal
+  gradient_source: DG
+  gradient_start_t: 50  # Default DG switch; used when dg_window is null.
+  d_window: null  # Auto: D-only before the DG interval; all steps in D-only mode.
+  dg_window: null  # Auto: [50, 1] in DG mode, empty otherwise.
+  channels:
+  - p
+  - omega
+  - q
+  rotation_start_t: 50
+  channel_windows: {}  # Optional p / omega / q: [start_t, end_t].
+  candidate_count: 20
+  candidate_start_t: 50
+  candidate_window: null  # Auto: [candidate_start_t, 1].
+  selector: auto  # DG/selection-only -> dg_minimax; D-only -> d_minimum.
+  sequence_operator: MTV
+  coordinate_scale: 4.0
+  rotation_scale: 1.0
+  sequence_scale: 1.0
+  rotation_cap_degrees: 5.0
+  hydro_prior_b: 0.8
+  backend: paper_v4
+  calibration: configs/calibration/H3.json
+  hard_calibration: configs/calibration/hard.json
+  numerical_policy: configs/calibration/numerical_policy.json
+  calibration_by_cdr:
+    H1: null
+    H2: null
+    H3: configs/calibration/H3.json
+    L1: null
+    L2: null
+    L3: null
+  calibration_scope: latest_table1_cdr_specific; missing non-H3 files must be imported
+    from completed production receipts
+scorers:
+  D:
+    checkpoint: ./diffab/tools/ddg/data/model.pt
+    sha256: a5550dd141cde1362e02ff541ad14d6d587e6b2e2aece5cd5b6db7a6a824c5d7
+  G:
+    python: ${AFFIGUIDE_GEARBIND_PYTHON}
+    checkpoint: ./trained_models/gearbind2.pth
+    sha256: 743b953a0091badf8291033f7fa8eafa2e05f993425473a3990a5f5dad736712
+
+dataset:
+  test:
+    type: sabdab
+    summary_path: ./data/sabdab_summary_all.tsv
+    chothia_dir: ./data/all_structures/chothia
+    processed_dir: ./data/processed
+    split: test
+
+execution:
+  workers: 1
+  mps: false

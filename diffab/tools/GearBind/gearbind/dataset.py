@@ -4,6 +4,86 @@ import glob
 import pickle
 from tqdm import tqdm
 
+
+# === GearBind debug: print is_mutation residue IDs (for diagnosing insertion-code handling) ===
+_GB_PRINT_ISMUT = os.getenv("GEARBIND_DEBUG_PRINT_ISMUT", "0") == "1"
+_GB_PRINT_LIMIT = int(os.getenv("GEARBIND_DEBUG_PRINT_LIMIT", "3"))
+_GB_PRINT_RESNUM = os.getenv("GEARBIND_DEBUG_PRINT_RESNUM", "").strip()  # e.g. "100" to focus
+_GB_PRINT_COUNTER = 0
+
+def _gb_id2alphabet():
+    # alphabet is defined in gearbind.data.Protein / protein.py; include leading space
+    # This is a safe local fallback used only for debugging prints.
+    import string
+    return [" "] + list(string.ascii_uppercase) + list(string.ascii_lowercase) + list(string.digits)
+
+def _gb_residue_id_strings(chain_id, residue_number, insertion_code, alphabet=None, residue_mask=None):
+    """Return residue id strings like ['D100', 'D100A', ...] for a residue-level mask."""
+    if alphabet is None:
+        alphabet = _gb_id2alphabet()
+    ids = []
+    n = int(chain_id.shape[0])
+    for i in range(n):
+        if residue_mask is not None and not bool(residue_mask[i]):
+            continue
+        c = int(chain_id[i].item())
+        rno = int(residue_number[i].item())
+        ic_val = int(insertion_code[i].item()) if insertion_code is not None else 0
+        ic = ""
+        if insertion_code is not None and ic_val > 0:
+            ic = alphabet[ic_val] if ic_val < len(alphabet) else str(ic_val)
+            if ic == " ":
+                ic = ""
+        c_letter = alphabet[c] if (0 <= c < len(alphabet)) else str(c)
+        ids.append(f"{c_letter}{rno}{ic}")
+    return ids
+
+def _gb_debug_print_is_mutation(label, protein, mutations, is_mutation_residue_mask, per_mut_hit=None):
+    """Print mutation residue ids at dataset stage. Controlled by env vars."""
+    global _GB_PRINT_COUNTER
+    if not _GB_PRINT_ISMUT:
+        return
+    if _GB_PRINT_COUNTER >= _GB_PRINT_LIMIT:
+        return
+    chain = getattr(protein, "chain_id", None)
+    resnum = getattr(protein, "residue_number", None)
+    icode = getattr(protein, "insertion_code", None)
+    if chain is None or resnum is None or icode is None:
+        return
+    alphabet = getattr(protein, "alphabet", None)
+    if alphabet is None:
+        alphabet = _gb_id2alphabet()
+    # optional focus on a residue number (e.g., 100)
+    focus_mask = None
+    if _GB_PRINT_RESNUM:
+        try:
+            target = int(_GB_PRINT_RESNUM)
+            focus_mask = (resnum == target)
+        except Exception:
+            focus_mask = None
+
+    mut_ids_all = _gb_residue_id_strings(chain, resnum, icode, alphabet=alphabet, residue_mask=is_mutation_residue_mask)
+    if focus_mask is not None:
+        # show which icode variants exist in structure for that resnum
+        focus_ids = _gb_residue_id_strings(chain, resnum, icode, alphabet=alphabet, residue_mask=focus_mask)
+    else:
+        focus_ids = None
+
+    print("\n[GEARBIND_DATASET_DEBUG] label=%s" % label)
+    print("  mutations(csv) =", mutations)
+    if focus_ids is not None:
+        print("  focus residue_ids(resnum=%s) =" % _GB_PRINT_RESNUM, focus_ids)
+    print("  is_mutation residue_ids =", mut_ids_all)
+
+    if per_mut_hit:
+        print("  per-mutation hits:")
+        # keep deterministic ordering
+        for m in mutations:
+            ids = per_mut_hit.get(m, [])
+            if len(ids) > 0:
+                print("   - %-10s -> %d hits: %s" % (m, len(ids), ids))
+    _GB_PRINT_COUNTER += 1
+
 import numpy as np
 import pandas as pd
 
@@ -156,16 +236,35 @@ class SKEMPI(data.ProteinDataset):
                     wild_type.entity_b = entity_b[wild_type.atom2residue]
 
                     is_mutation = torch.zeros(wild_type.num_residue, dtype=torch.bool)
+                    per_mut_hit = {} if _GB_PRINT_ISMUT else None
                     for m in mutations:
                         if m[-2].isalpha():
-                            is_mutation |= \
-                                (wild_type.chain_id == wild_type.alphabet2id[m[1]]) & \
-                                (wild_type.residue_number == int(m[2:-2])) & \
-                                (wild_type.insertion_code == wild_type.alphabet2id[m[-2]])
+                            hit = (wild_type.chain_id == wild_type.alphabet2id[m[1]]) & \
+                                  (wild_type.residue_number == int(m[2:-2])) & \
+                                  (wild_type.insertion_code == wild_type.alphabet2id[m[-2]])
                         else:
-                            is_mutation |= \
-                                (wild_type.chain_id == wild_type.alphabet2id[m[1]]) & \
-                                (wild_type.residue_number == int(m[2:-1]))
+                            # mutation without insertion code: e.g. RD100E
+                            same = (wild_type.chain_id == wild_type.alphabet2id[m[1]]) & \
+                                   (wild_type.residue_number == int(m[2:-1]))
+
+                            hit = same
+                            if hasattr(wild_type, "insertion_code") and wild_type.insertion_code is not None:
+                                # If this residue number forms an insertion cluster (100,100A,100B,...),
+                                # then a no-icode mutation should ONLY match the base residue (icode blank),
+                                # instead of matching the whole cluster.
+                                codes = wild_type.insertion_code[same]
+                                if codes.numel() > 0:
+                                    has_insert = (codes > 0).any()
+                                    has_blank  = (codes <= 0).any()   # blank / unknown treated as base
+                                    if has_insert and has_blank:
+                                        hit = same & (wild_type.insertion_code <= 0)
+
+                        is_mutation |= hit
+                        if per_mut_hit is not None:
+                            # Store which residues each mutation string matched (residue-level).
+                            per_mut_hit[m] = _gb_residue_id_strings(wild_type.chain_id, wild_type.residue_number, wild_type.insertion_code,
+                                                                   alphabet=getattr(wild_type, 'alphabet', None), residue_mask=hit)
+                    _gb_debug_print_is_mutation('wild_type', wild_type, mutations, is_mutation, per_mut_hit=per_mut_hit)
                     wild_type.is_mutation = is_mutation[wild_type.atom2residue]
                 wild_type = wild_type.subgraph(wild_type.entity_a | wild_type.entity_b)
                 if hasattr(wild_type, "node_feature"):
@@ -186,16 +285,34 @@ class SKEMPI(data.ProteinDataset):
                     mutant.entity_b = entity_b[mutant.atom2residue]
 
                     is_mutation = torch.zeros(mutant.num_residue, dtype=torch.bool)
+                    per_mut_hit = {} if _GB_PRINT_ISMUT else None
                     for m in mutations:
                         if m[-2].isalpha():
-                            is_mutation |= \
-                                (mutant.chain_id == mutant.alphabet2id[m[1]]) & \
-                                (mutant.residue_number == int(m[2:-2])) & \
-                                (mutant.insertion_code == mutant.alphabet2id[m[-2]])
+                            hit = (mutant.chain_id == mutant.alphabet2id[m[1]]) & \
+                                  (mutant.residue_number == int(m[2:-2])) & \
+                                  (mutant.insertion_code == mutant.alphabet2id[m[-2]])
                         else:
-                            is_mutation |= \
-                                (mutant.chain_id == mutant.alphabet2id[m[1]]) & \
-                                (mutant.residue_number == int(m[2:-1]))
+                            # mutation without insertion code: e.g. RD100E
+                            same = (mutant.chain_id == mutant.alphabet2id[m[1]]) & \
+                                   (mutant.residue_number == int(m[2:-1]))
+
+                            hit = same
+                            if hasattr(mutant, "insertion_code") and mutant.insertion_code is not None:
+                                # If this residue number forms an insertion cluster (100,100A,100B,...),
+                                # then a no-icode mutation should ONLY match the base residue (icode blank),
+                                # instead of matching the whole cluster.
+                                codes = mutant.insertion_code[same]
+                                if codes.numel() > 0:
+                                    has_insert = (codes > 0).any()
+                                    has_blank  = (codes <= 0).any()   # blank / unknown treated as base
+                                    if has_insert and has_blank:
+                                        hit = same & (mutant.insertion_code <= 0)
+
+                        is_mutation |= hit
+                        if per_mut_hit is not None:
+                            per_mut_hit[m] = _gb_residue_id_strings(mutant.chain_id, mutant.residue_number, mutant.insertion_code,
+                                                                   alphabet=getattr(mutant, 'alphabet', None), residue_mask=hit)
+                    _gb_debug_print_is_mutation('mutant', mutant, mutations, is_mutation, per_mut_hit=per_mut_hit)
                     mutant.is_mutation = is_mutation[mutant.atom2residue]
                 mutant = mutant.subgraph(mutant.entity_a | mutant.entity_b)
                 if hasattr(mutant, "node_feature"):
@@ -335,6 +452,14 @@ class HER2(SKEMPI):
             subset
         ]
 
+@R.register("datasets.VHH_PD1")
+class VHH_PD1(HER2):
+
+    # 存缓存用的文件名，随便叫，只要不和别的冲突
+    processed_file = "VHH_PD1.pkl.gz"
+
+    # 这里的 split 名要和你 data 目录里的子目录名一致
+    splits = ["vhh_pd1_scan"]
 
 @R.register("datasets.CR3022")
 class CR3022(HER2):

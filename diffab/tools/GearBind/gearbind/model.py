@@ -5,6 +5,7 @@ from torch import nn
 from torch import autograd
 
 from torch_scatter import scatter_add
+from diffab.numerics.backend import graph_sum, GraphSumReadout
 
 from torchdrug import core, layers, utils
 from torchdrug.layers import functional
@@ -30,7 +31,7 @@ class BindModel(nn.Module, core.Configurable):
 
         wild_type = batch["wild_type"]
         wild_type_output = self.model(wild_type, wild_type.node_feature.float(), all_loss=all_loss, metric=metric)
-        
+
         wild_type_output = wild_type_output["graph_feature"]
         mutant_output = mutant_output["graph_feature"]
 
@@ -38,10 +39,10 @@ class BindModel(nn.Module, core.Configurable):
         pred = self.mlp(outputs)
         outputs = torch.cat([wild_type_output, mutant_output], dim=-1)
         pred = pred - self.mlp(outputs)
-        
+
         return {
-            'ddG': pred, 
-            'wild_type_feature': wild_type_output, 
+            'ddG': pred,
+            'wild_type_feature': wild_type_output,
             'mutant_feature': mutant_output
         }
 
@@ -88,7 +89,7 @@ class GearBind(nn.Module, core.Configurable):
                 self.batch_norm_layers.append(nn.BatchNorm1d(self.dims[i + 1]))
 
         if readout == "sum":
-            self.readout = layers.SumReadout()
+            self.readout = GraphSumReadout()
         elif readout == "mean":
             self.readout = layers.MeanReadout()
         else:
@@ -104,7 +105,7 @@ class GearBind(nn.Module, core.Configurable):
         )
         pos_CB, _ = functional.variadic_to_padded(pos_CB, residue_graph.num_nodes, value=0)
         frame, _ = functional.variadic_to_padded(residue_graph.frame, residue_graph.num_nodes, value=0)
-        
+
         if self.num_angle_bin:
             line_graph = self.spatial_line_graph(graph)
             edge_input = line_graph.node_feature.float()
@@ -118,7 +119,7 @@ class GearBind(nn.Module, core.Configurable):
             if self.num_angle_bin:
                 edge_hidden = self.edge_layers[i](line_graph, edge_input)
                 node_out = graph.edge_list[:, 1] * self.num_relation + graph.edge_list[:, 2]
-                update = scatter_add(edge_hidden * graph.edge_weight.unsqueeze(-1), node_out, dim=0, dim_size=graph.num_node * self.num_relation) 
+                update = graph_sum(edge_hidden * graph.edge_weight.unsqueeze(-1), node_out, input.shape[0] * self.num_relation, backend=getattr(self, "numerical_backend", "production_atomic"))
                 update = update.view(graph.num_node, self.num_relation * edge_hidden.shape[1])
                 update = self.layers[i].linear(update)
                 update = self.layers[i].activation(update)
@@ -151,7 +152,7 @@ class GearBind(nn.Module, core.Configurable):
 @R.register("models.DDGPredictor")
 class DDGPredictor(nn.Module, core.Configurable):
 
-    def __init__(self, hidden_dim=512, num_layers=4, pair_dim=128, max_relpos=100, 
+    def __init__(self, hidden_dim=512, num_layers=4, pair_dim=128, max_relpos=100,
                 num_neighbors=128, num_heads=12, activation=None):
         super(DDGPredictor, self).__init__()
         self.hidden_dim = hidden_dim
@@ -217,7 +218,7 @@ class DDGPredictor(nn.Module, core.Configurable):
         feat_wm = torch.cat([output_wt, output_mt], dim=-1)
         feat_mw = torch.cat([output_mt, output_wt], dim=-1)
         feat_diff = self.mlp(feat_wm) - self.mlp(feat_mw)       # (N, L, F)
-        
+
         per_residue_ddg = (self.project(feat_diff) * mask.float().unsqueeze(-1)).squeeze(-1)   # (N, L)
         ddG = per_residue_ddg.sum(dim=1, keepdim=True)    # (N,)
 

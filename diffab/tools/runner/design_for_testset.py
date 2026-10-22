@@ -3,23 +3,29 @@ import copy
 import json
 import os
 
-import numpy as np
-import torch
-from torch.utils.data import DataLoader
-from tqdm.auto import tqdm
-
-from diffab.datasets import get_dataset
-from diffab.models import get_model
-from diffab.modules.common.geometry import reconstruct_backbone_partially
-from diffab.modules.common.so3 import so3vec_to_rotation
-from diffab.utils.inference import RemoveNative
-from diffab.utils.protein.writers import save_pdb
-from diffab.utils.train import recursive_to
-
-from diffab.utils.misc import *
-from diffab.utils.data import *
-from diffab.utils.transforms import *
-from diffab.utils.inference import *
+def _load_dependencies():
+    # --help uses only the standard library, as does the PDB entry point.
+    global np, torch, DataLoader, tqdm, get_dataset, get_model
+    global reconstruct_backbone_partially, so3vec_to_rotation, RemoveNative
+    global save_pdb, recursive_to, load_config, seed_all, get_new_log_dir, get_logger
+    global PaddingCollate, apply_patch_to_tensor, Compose, MaskSingleCDR
+    global MaskMultipleCDRs, MaskAntibody, MergeChains, PatchAroundAnchor
+    global find_cdrs, get_residue_first_last
+    import numpy as np
+    import torch
+    from torch.utils.data import DataLoader
+    from tqdm.auto import tqdm
+    from diffab.datasets import get_dataset
+    from diffab.models import get_model
+    from diffab.modules.common.geometry import reconstruct_backbone_partially
+    from diffab.modules.common.so3 import so3vec_to_rotation
+    from diffab.utils.inference import RemoveNative, find_cdrs, get_residue_first_last
+    from diffab.utils.protein.writers import save_pdb
+    from diffab.utils.train import recursive_to
+    from diffab.utils.misc import load_config, seed_all, get_new_log_dir, get_logger
+    from diffab.utils.data import PaddingCollate, apply_patch_to_tensor
+    from diffab.utils.transforms import (Compose, MaskSingleCDR, MaskMultipleCDRs,
+                                         MaskAntibody, MergeChains, PatchAroundAnchor)
 
 
 def serialize_data(obj):
@@ -205,9 +211,15 @@ def _log_sampling_options(logger, sampling_opt):
 
 
 def design_for_testset(args):
+    from diffab.tools.runner.execution import dispatch
+    handled, result = dispatch(args, 'testset')
+    if handled:
+        return result
+    _load_dependencies()
+    from diffab.tools.runner import design_for_pdb as pdb_entry
     config, config_name = load_config(args.config)
+    pdb_entry._apply_sampling_overrides(config, args)
     seed_all(args.seed if args.seed is not None else config.sampling.seed)
-    sampling_opt = _read_sampling_options(config, args)
 
     dataset = get_dataset(config.dataset.test)
     if args.index < 0 or args.index >= len(dataset):
@@ -217,12 +229,22 @@ def design_for_testset(args):
     structure_ = get_structure()
     structure_id = structure_['id']
 
+    if 'guidance' in config:
+        # Keep the dataset's parsed chains, numbering and coordinates intact.
+        # Both public entries use exactly one updated-method implementation.
+        pdb_entry._load_dependencies()
+        options = pdb_entry.args_factory(**vars(args))
+        return pdb_entry._design_guided(options, config, prepared_structure=structure_)
+
+    sampling_opt = _read_sampling_options(config, args)
+    generator_checkpoint_path = pdb_entry._prepare_legacy_model_assets(config, args, sampling_opt)
+
     tag_postfix = '_%s' % args.tag if args.tag else ''
     log_dir = get_new_log_dir(
         os.path.join(args.out_root, config_name + tag_postfix),
         prefix='%04d_%s' % (args.index, structure_id),
     )
-    logger = get_logger('sample', log_dir)
+    logger = get_logger('sample', log_dir, stream_level='WARNING')
     logger.info(f'Data ID: {structure_id}')
     logger.info(f'Results will be saved to {log_dir}')
     _log_sampling_options(logger, sampling_opt)
@@ -231,7 +253,7 @@ def design_for_testset(args):
     save_pdb(data_native, os.path.join(log_dir, 'reference.pdb'))
 
     logger.info('Loading model config and checkpoints: %s' % config.model.checkpoint)
-    ckpt = torch.load(config.model.checkpoint, map_location='cpu')
+    ckpt = torch.load(str(generator_checkpoint_path), map_location='cpu')
     cfg_ckpt = ckpt['config']
     model = get_model(cfg_ckpt.model).to(args.device)
     lsd = model.load_state_dict(ckpt['model'])
@@ -359,49 +381,19 @@ def design_for_testset(args):
 
         logger.info('Finished.\n')
 
+    print('Output: ' + os.path.abspath(log_dir), flush=True)
+
 
 def args_from_cmdline():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('index', type=int)
-    parser.add_argument('-c', '--config', type=str, default='./configs/test/codesign_single_guided.yml')
-    parser.add_argument('-o', '--out_root', type=str, default='./results')
-    parser.add_argument('-t', '--tag', type=str, default='')
-    parser.add_argument('-s', '--seed', type=int, default=None)
-    parser.add_argument('-d', '--device', type=str, default='cuda')
-    parser.add_argument('-b', '--batch_size', type=int, default=16)
-    parser.add_argument('--task', type=str, default=None, choices=['redesign', 'external'])
-    parser.add_argument('--sample_ddg', dest='sample_ddg', action='store_true', default=None)
-    parser.add_argument('--no_sample_ddg', dest='sample_ddg', action='store_false', default=None)
-    parser.add_argument('--sample_hydro', dest='sample_hydro', action='store_true', default=None)
-    parser.add_argument('--no_sample_hydro', dest='sample_hydro', action='store_false', default=None)
-    parser.add_argument('--hydro_prior_b', type=float, default=None)
-    parser.add_argument('--ddg_guidance_model', type=str, default=None, choices=['ddgpred', 'gearbind', 'gearb'])
-    parser.add_argument('--ddg_ref', type=str, default=None, choices=['scaled', 'prev'])
-    parser.add_argument('--gradient_scale_cord', type=float, default=None)
-    parser.add_argument('--gradient_scale_categ', type=float, default=None)
-    return parser.parse_args()
+    from diffab.tools.runner.design_for_pdb import argument_parser
+    return argument_parser('testset').parse_args()
 
 
 def args_factory(**kwargs):
-    default_args = EasyDict(
-        index=0,
-        config='./configs/test/codesign_single_guided.yml',
-        out_root='./results',
-        tag='',
-        seed=None,
-        device='cuda',
-        batch_size=16,
-        task=None,
-        sample_ddg=None,
-        sample_hydro=None,
-        hydro_prior_b=None,
-        ddg_guidance_model=None,
-        ddg_ref=None,
-        gradient_scale_cord=None,
-        gradient_scale_categ=None,
-    )
-    default_args.update(kwargs)
-    return default_args
+    from diffab.tools.runner.design_for_pdb import args_factory as pdb_args_factory
+    values = dict(index=0, pdb_path=None, heavy=None, light=None, no_renumber=True)
+    values.update(kwargs)
+    return pdb_args_factory(**values)
 
 
 def main():

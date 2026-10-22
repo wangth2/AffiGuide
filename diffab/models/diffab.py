@@ -143,6 +143,27 @@ class DiffusionAntibodyDesign(nn.Module):
             sample_opt = dict(sample_opt)
 
 
+        if 'guidance' in sample_opt:
+            from diffab.numerics.backend import configure_generator
+            from diffab.modules.diffusion.guidance_config import normalize_guidance
+            guidance=normalize_guidance(sample_opt['guidance'])
+            scorers=sample_opt.pop('scorers')
+            native=sample_opt.pop('native_batch', None)
+            if native is None:
+                raise ValueError('Guided sampling requires the native crop before RemoveNative')
+            context=configure_generator(self,guidance['backend'],sample_opt.get('trajectory_seed',0))
+            # Backend construction is RNG-neutral. Preprocessing already consumed
+            # the frozen trajectory stream; do not reseed before initialization.
+            with context.activate():
+                encoded=self.encode(batch,remove_structure=True,remove_sequence=True)
+                res,pair,R,p=encoded
+                scorers.reference=scorers.D.bind_old({'batch':batch,'native_batch':native},self,encoded=encoded)
+                if scorers.G is not None:
+                    scorers.G.initialize(native,native['aa'],native['pos_heavyatom'][:,:,BBHeavyAtom.CA])
+                return self.diffusion.sample(batch,rotation_to_so3vec(R),p,batch['aa'],res,pair,
+                    batch['generate_flag'],batch['mask'],outfile,scorers=scorers,
+                    numerical_context=context,**sample_opt)
+
         sample_opt.setdefault('sample_structure', True)
         sample_opt.setdefault('sample_sequence', True)
         sample_opt.setdefault('sample_ddg', True)

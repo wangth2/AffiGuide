@@ -1,0 +1,39 @@
+{
+  "status": "FROZEN",
+  "hard": {
+    "D": {
+      "location": -1.8345531821250916,
+      "scale": 0.5236831558585167,
+      "scale_method": "1.4826_MAD",
+      "unscaled_MAD": 0.3532194495201111,
+      "sample_count": 8,
+      "fallback_order": [
+        "1.4826_MAD",
+        "IQR_div_1.349",
+        "population_std",
+        "numeric_floor"
+      ],
+      "numeric_floor": 1e-06
+    },
+    "G": {
+      "location": 1.6322798132896423,
+      "scale": 1.1753668528318404,
+      "scale_method": "1.4826_MAD",
+      "unscaled_MAD": 0.7927740812301636,
+      "sample_count": 8,
+      "fallback_order": [
+        "1.4826_MAD",
+        "IQR_div_1.349",
+        "population_std",
+        "numeric_floor"
+      ],
+      "numeric_floor": 1e-06
+    }
+  },
+  "provenance": {
+    "source_sha256": "e35134a855ba79367f540fc1cff1b33c706a0c2c32df45f85dbff426a9046b27",
+    "source_states": "8 saved HER2 R0 states, seed 2022, IDs 0-3, t50 and t10",
+    "reference_D": "historical scaled R0",
+    "reference_G": "native"
+  }
+}

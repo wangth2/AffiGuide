@@ -1,0 +1,12 @@
+AffiGuide
+
+The original project author information and LICENSE are retained from the
+AffiGuide release repository (baseline commit 4a604b18736bbdbe11d3c7631f2df2a177a3ca85).
+
+This distribution includes adaptations of DiffAb (Shitong Luo and collaborators),
+Antibody-Diffusion-Properties (Amelia Villegas-Morcillo and collaborators),
+Helixon binding-ddG-predictor, and GearBind (Huiyu Cai and collaborators).
+Upstream copyright notices and licenses remain applicable. GearBind's license
+is included at diffab/tools/GearBind/LICENSE; the Helixon license is retained
+at diffab/tools/ddg/LICENSE. See README.md for original projects and citations. No claim of authorship over
+upstream components or permission to redistribute their model weights is made.

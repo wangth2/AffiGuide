@@ -120,7 +120,8 @@ class ApproxAngularDistribution(nn.Module):
         
         # Samples from histogram
         prob = self.Y[std_idx]  # (N, n_bins)
-        bin_idx = torch.multinomial(prob[:, :-1], num_samples=1).squeeze(-1)    # (N,)
+        from diffab.numerics.backend import sample_so3_categories
+        bin_idx = sample_so3_categories(prob[:, :-1]).squeeze(-1)    # (N,)
         bin_start = self.X[std_idx, bin_idx]    # (N,)
         bin_width = self.X[std_idx, bin_idx+1] - self.X[std_idx, bin_idx]
         samples_hist = bin_start + torch.rand_like(bin_start) * bin_width    # (N,)

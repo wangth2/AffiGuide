@@ -13,6 +13,16 @@ HYDROPATHY = {
 }
 
 
+# The diffusion posterior uses the frozen property prior in the model's AA
+# order. Evaluation statistics below are separate from this sampling prior.
+from diffab.utils.protein.constants import ressymb_to_resindex
+hydropathy_vector = np.zeros((len(ressymb_to_resindex)))
+for aa_res, index in ressymb_to_resindex.items():
+    hydropathy_vector[index] = HYDROPATHY[aa_res]
+hydropathy_prob = -hydropathy_vector[:-1] + hydropathy_vector[:-1].max()
+hydropathy_prob /= hydropathy_prob.sum()
+
+
 def get_hydropathy(sequence):
     return np.asarray([HYDROPATHY.get(aa, 0.0) for aa in sequence], dtype=float)
 

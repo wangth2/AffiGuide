@@ -1,0 +1,20 @@
+{
+  "version": "AFFIGUIDE_PORTABLE_SO3_SPLITMIX64_F32CDF_V1",
+  "schema": "AFFIGUIDE_PORTABLE_RNG_DEVICE_ONLY_FATBIN_V2_DRIVER_API",
+  "source": "portable_categorical.cu",
+  "source_sha256": "d5091a04a1637407287352109d8dcb11092ccc32dd4fc826188dbbd61f7b312c",
+  "library": "portable_rng_v1.fatbin",
+  "library_sha256": "eb72041499e45b4129e01dceea71916a2646da9ed3f74b9872c14922d7dac6aa",
+  "compiled_compute_capabilities": [
+    80,
+    86,
+    89
+  ],
+  "PTX_JIT_fallback": false,
+  "new_host_ELF_or_glibc_or_cudart_dependency": false,
+  "returncode": 0,
+  "stdout": "",
+  "stderr": "",
+  "cross_device_validation": "NOT_PERFORMED_BY_BUILD",
+  "release_note": "Frozen device binary reused byte-for-byte; release integration requires independent regression."
+}

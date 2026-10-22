@@ -53,7 +53,59 @@ class BindingAffinityChange(tasks.PropertyPrediction, core.Configurable):
         self.num_class = self.num_class or num_class
 
     def predict(self, batch, all_loss=None, metric=None):
+        # ------------------------------------------------------------
+        # Optional debug dump: save the *pre-GraphConstruction* graphs.
+        # This is controlled by env vars that you can set from your bridge:
+        #   GEARBIND_GCIN_DIR   : output directory
+        #   GEARBIND_GCIN_TAG   : optional subfolder / tag name
+        #   GEARBIND_GCIN_ONCE  : if "1", clear env vars after dumping (avoid dumping in ensembles)
+        # ------------------------------------------------------------
         if self.graph_construction_model:
+            import os
+            out_dir = os.getenv("GEARBIND_GCIN_DIR", None)
+            if out_dir:
+                tag = os.getenv("GEARBIND_GCIN_TAG", "").strip()
+                once = os.getenv("GEARBIND_GCIN_ONCE", "0") == "1"
+                out_dir2 = os.path.join(out_dir, tag) if tag else out_dir
+                os.makedirs(out_dir2, exist_ok=True)
+
+                def _cpu_detach(x):
+                    if x is None:
+                        return None
+                    if torch.is_tensor(x):
+                        return x.detach().cpu()
+                    return x
+
+                def dump_graph(g, name):
+                    # Keep this list small but sufficient for later matching / debugging.
+                    payload = {
+                        "node_position": _cpu_detach(getattr(g, "node_position", None)),
+                        "atom2residue": _cpu_detach(getattr(g, "atom2residue", None)),
+                        "node2graph": _cpu_detach(getattr(g, "node2graph", None)),
+                        "atom_name": _cpu_detach(getattr(g, "atom_name", None)),
+                        "atom_type": _cpu_detach(getattr(g, "atom_type", None)),
+                        "residue_type": _cpu_detach(getattr(g, "residue_type", None)),
+                        "chain_id": _cpu_detach(getattr(g, "chain_id", None)),
+                        "residue_number": _cpu_detach(getattr(g, "residue_number", None)),
+                        "insertion_code": _cpu_detach(getattr(g, "insertion_code", None)),
+                        "entity_a": _cpu_detach(getattr(g, "entity_a", None)),
+                        "entity_b": _cpu_detach(getattr(g, "entity_b", None)),
+                        "is_mutation": _cpu_detach(getattr(g, "is_mutation", None)),
+                        "num_nodes": int(getattr(g, "num_node", getattr(g, "num_nodes", -1))),
+                        "num_edges": int(getattr(g, "num_edge", getattr(g, "num_edges", -1))),
+                        "batch_size": int(getattr(g, "batch_size", 1)),
+                    }
+                    torch.save(payload, os.path.join(out_dir2, f"{name}.pt"))
+
+                dump_graph(batch["wild_type"], "wild_type_pre_gc")
+                dump_graph(batch["mutant"], "mutant_pre_gc")
+
+                # Avoid duplicate dumps in the same ddG call (e.g., task ensembles)
+                if once:
+                    os.environ.pop("GEARBIND_GCIN_DIR", None)
+                    os.environ.pop("GEARBIND_GCIN_TAG", None)
+                    os.environ.pop("GEARBIND_GCIN_ONCE", None)
+
             batch["wild_type"] = self.graph_construction_model(batch["wild_type"])
             batch["mutant"] = self.graph_construction_model(batch["mutant"])
         pred = self.model(batch, all_loss=all_loss, metric=metric)['ddG']        
