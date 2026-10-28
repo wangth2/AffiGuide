@@ -31,13 +31,6 @@ The environment check imports both runtimes, loads the bundled GearBind extensio
 
 The GearBind subprocess automatically prioritizes its own Conda `lib` directory while preserving external NVIDIA driver paths. No global `LD_LIBRARY_PATH` change is needed. If you encounter `GLIBCXX_3.4.31 not found` with an existing environment, update it with `conda env update -n affiguide-gearbind -f envs/affiguide-gearbind.yml`, verify that `AFFIGUIDE_GEARBIND_PYTHON` points to that environment, and rerun the check. Do not replace the system C++ library.
 
-<details>
-<summary>PyTorch 1.12.1 matrix-exponential diagnostics</summary>
-
-This PyTorch version can emit an internal buffer-resize deprecation warning during rotation matrix exponentials and their derivatives. AffiGuide filters only the matching `3×3`/`6×6` warning around these operations, only on PyTorch 1.12.1. The original matrix-exponential and autograd calculations are unchanged; other warnings and errors remain visible. Set `AFFIGUIDE_SHOW_MATRIX_EXP_WARNINGS=1` to see the unfiltered diagnostics.
-
-</details>
-
 ## Model weights
 
 **Missing required weights are downloaded automatically on first use.** Files are checked against their expected size and SHA256 before loading. You can also fetch all three checkpoints before running a design:
@@ -182,8 +175,6 @@ This is a workload-based recommendation, not a minimum-memory specification. NVI
 
 The bundled `paper_v4` device kernels cover **SM80/86/89**. Examples at those compute capabilities include A100, RTX A6000 and RTX 4090; see NVIDIA's [GPU compute-capability list](https://developer.nvidia.com/cuda/gpus). Architecture coverage alone does not establish full application acceptance or adequate memory. H100/H200 and RTX 50-series GPUs are outside the current bundled kernel coverage, even if they have more memory. The GearBind extension additionally requires Linux x86_64, Python 3.8, PyTorch 1.12.1, CUDA 11.3 and C++ ABI 0; see its [runtime notes](diffab/tools/GearBind/native/README.md).
 
-Prior full-release measurements on an RTX 4090 24 GB provide a reference: single-worker DG50 + K20 + Hydro H3 runs had sampled device-memory peaks of **3.92–4.70 GiB**, and a separate four-worker private-MPS run had a sampled device-memory peak of **15.08 GiB** and process-tree PSS peak of **19.24 GiB**. Device usage was sampled every 0.5 seconds and included GearBind and CUDA contexts; short peaks can be missed. These observations used the earlier release launcher, main/GearBind intra-op thread counts of 1/2 per worker and specific H3 workloads. The current compact launcher has not repeated that GPU/MPS acceptance run. The 24 GB GPU / 32 GB RAM recommendation allows headroom for those observed workloads and is not a universal bound.
-
 `--workers N` launches independent design workers on the selected GPU; each worker loads its own models and, for DG, starts its own GearBind process. `--num-samples` still sets the total number of complete designs per CDR, while `--K` controls per-step candidates. Start with two workers only after the single-worker command succeeds:
 
 ```bash
@@ -195,14 +186,6 @@ Add `--mps` to request a private NVIDIA MPS service, or use `--no-mps` to disabl
 Worker assignment preserves logical design IDs and their seed derivation. This is not a promise of GPU bitwise equality across worker counts or machines. Monitor host RAM and CPU load as well as GPU memory; the default main-process thread count can depend on the environment, and excessive CPU threads across workers can reduce throughput. Parallel logs, plans and status are written below the output directory in `_execution/`. Legacy `--batch_size` controls legacy sampling; the updated sampler processes one trajectory at a time per worker.
 
 </details>
-
-## Release scope
-
-- The updated DG configuration includes **H3 calibration only**. H1/H2/L1/L2/L3 require their own matching calibration resources; H3 calibration is not substituted for them.
-- This compact distribution contains the runtime and original configurations. It does not include the complete paper evaluation suite or separate ablation presets.
-- The default single-worker **DG50 + K20 + Hydro** H3 PDB workflow completed all 100 sampling steps on an **RTX 4090 24 GB**, using Python 3.8.20, PyTorch 1.12.1 and CUDA 11.3. Automatic first-use downloads and SHA256 checks passed for all three checkpoints. The matrix-exponential warning display change preserved the complete sampling trace, designed PDB and posterior probabilities exactly in the repeated GPU run. The CPU validation suite contains **92 passing checks**.
-- Fresh creation of both Conda environments, the full `design_testset.py` GPU workflow and parallel/MPS execution have not yet been revalidated for this compact release. The single-example PDB run is not a full benchmark reproduction.
-- Resume requires matching method, input and source identities. Checkpoints from the earlier V4 source tree require that source version.
 
 ## Attribution and license
 
